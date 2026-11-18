@@ -32,11 +32,6 @@ FAST_NONE_PROMPTS = {
 }
 
 
-def _is_default_profile() -> bool:
-    home = str(get_hermes_home())
-    return "/profiles/" not in home
-
-
 def _load_few_shot_examples() -> str:
     if not FEW_SHOT_FILE.exists():
         return ""
@@ -129,11 +124,7 @@ def _log_triage(prompt: str, effort: str, dt_ms: float, source: str, session_id:
 
 
 def _on_llm_request(request: Dict[str, Any], **context: Any) -> Optional[Dict[str, Any]]:
-    # 1. Profile Isolation: Run ONLY for default profile
-    if not _is_default_profile():
-        return None
-
-    # 2. Honor explicit reasoning if set by user or agent config
+    # 1. Honor explicit reasoning if set by user or agent config
     if request.get("reasoning_effort") not in (None, "", "auto"):
         return None
     if (request.get("extra_body") or {}).get("reasoning_effort"):
