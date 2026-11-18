@@ -1,0 +1,5 @@
+name: tool-clean-guard
+version: 1.0.0
+description: "Pre-tool-call XML/ChatML delimiter stripping, MOTD stripping, multi-format syntax validation, and audit logging."
+author: "Scott Hernandez"
+enabled: true

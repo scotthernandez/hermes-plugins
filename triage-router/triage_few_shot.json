@@ -1,0 +1,34 @@
+[
+  {
+    "prompt": "hi there",
+    "effort": "NONE"
+  },
+  {
+    "prompt": "check git status in this repo",
+    "effort": "LOW"
+  },
+  {
+    "prompt": "check if the production API server is still responding",
+    "effort": "LOW"
+  },
+  {
+    "prompt": "write a python function to parse a CSV and calculate mean",
+    "effort": "MEDIUM"
+  },
+  {
+    "prompt": "Use SearXNG to research the latest 2026 developments in MoE and CUDA kernels",
+    "effort": "HIGH"
+  },
+  {
+    "prompt": "diagnose why the GPU process hung and analyze the kernel trace",
+    "effort": "HIGH"
+  },
+  {
+    "prompt": "design a rate limiter for a websocket gateway handling 10k concurrent connections",
+    "effort": "HIGH"
+  },
+  {
+    "prompt": "trace the root cause of a flaky integration test that only fails under load on CI",
+    "effort": "HIGH"
+  }
+]
