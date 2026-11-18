@@ -1,0 +1,5 @@
+name: dynamic-request-modifier
+version: 1.0.0
+description: "Dynamic LLM request parameter modifier (reasoning effort, etc.) via an auxiliary classifier model."
+author: "Scott Hernandez"
+enabled: true

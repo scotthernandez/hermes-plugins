@@ -1,5 +1,0 @@
-name: triage-router
-version: 1.0.0
-description: "Adaptive reasoning effort triage via a fast OpenAI-compatible classifier endpoint for the default profile."
-author: "Scott Hernandez"
-enabled: true
