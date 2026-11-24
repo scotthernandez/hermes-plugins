@@ -22,11 +22,61 @@ CLEAN_FOLLOWUP_MODE = os.environ.get("DYNAMIC_REQUEST_MODIFIER_CLEAN_FOLLOWUP", 
 AUX_TASK = "dynamic_request_modifier"
 PLUGIN_DIR = Path(__file__).parent
 FEW_SHOT_FILE = PLUGIN_DIR / "triage_few_shot.json"
-AUDIT_LOG_FILE = Path(get_hermes_home()) / "logs" / "dynamic_request_modifier_audit.jsonl"
 
 _PLUGIN_CTX: Any = None
 _TURN_EFFORT_CACHE: Dict[tuple[str, str], str] = {}
 _MAX_TURN_CACHE = 256
+_PROFILE_CONFIG_CACHE: Dict[str, tuple[int, str]] = {}
+
+
+def _get_audit_log_file() -> Path:
+    return Path(get_hermes_home()) / "logs" / "dynamic_request_modifier_audit.jsonl"
+
+
+def _profile_pinned_reasoning_effort() -> str:
+    """Return pinned agent.reasoning_effort from active profile config.yaml, or '' if unset/auto."""
+    cfg_path = Path(get_hermes_home()) / "config.yaml"
+    try:
+        mtime_ns = cfg_path.stat().st_mtime_ns
+    except OSError:
+        return ""
+    key = str(cfg_path)
+    cached = _PROFILE_CONFIG_CACHE.get(key)
+    if cached is not None and cached[0] == mtime_ns:
+        return cached[1]
+
+    pinned = ""
+    try:
+        text = cfg_path.read_text(encoding="utf-8")
+        try:
+            import yaml  # type: ignore
+
+            cfg = yaml.safe_load(text) or {}
+            val = (cfg.get("agent") or {}).get("reasoning_effort") if isinstance(cfg, dict) else None
+            if val not in (None, "", "auto"):
+                pinned = str(val).strip().lower()
+        except Exception:
+            in_agent = False
+            for line in text.splitlines():
+                if not line.strip() or line.lstrip().startswith("#"):
+                    continue
+                if not line[0].isspace():
+                    in_agent = line.strip().startswith("agent:")
+                    continue
+                if in_agent:
+                    m = re.match(r"^\s+reasoning_effort:\s*(.*?)\s*$", line)
+                    if m:
+                        raw = m.group(1).strip().strip("'\"").lower()
+                        if raw not in ("", "none", "~", "null", "auto") or m.group(1).strip().strip("'\"") == "none":
+                            pinned = raw
+                        if m.group(1).strip().strip("'\"").lower() == "none":
+                            pinned = "none"
+                        break
+    except Exception as exc:
+        logger.debug("Failed to read profile config %s: %s", cfg_path, exc)
+
+    _PROFILE_CONFIG_CACHE[key] = (mtime_ns, pinned)
+    return pinned
 
 FAST_NONE_PROMPTS = {
     "hi", "hello", "hey", "yes", "no", "ok", "okay", "thanks", "thank you",
@@ -123,7 +173,8 @@ def _classify_effort(prompt: str) -> tuple[str, float]:
 
 def _log_triage(prompt: str, effort: str, dt_ms: float, source: str, session_id: str = "") -> None:
     try:
-        AUDIT_LOG_FILE.parent.mkdir(parents=True, exist_ok=True)
+        audit_file = _get_audit_log_file()
+        audit_file.parent.mkdir(parents=True, exist_ok=True)
         entry = {
             "timestamp": datetime.now(timezone.utc).isoformat(),
             "session_id": session_id,
@@ -132,7 +183,7 @@ def _log_triage(prompt: str, effort: str, dt_ms: float, source: str, session_id:
             "latency_ms": round(dt_ms, 2),
             "source": source
         }
-        with open(AUDIT_LOG_FILE, "a", encoding="utf-8") as f:
+        with open(audit_file, "a", encoding="utf-8") as f:
             f.write(json.dumps(entry) + "\n")
     except Exception as exc:
         logger.debug("Failed to write triage audit log: %s", exc)
@@ -156,22 +207,29 @@ def _apply_effort(request: Dict[str, Any], effort: str, provider: str = "") -> D
     request["reasoning_effort"] = effort
     if (provider or "").lower() in _LOCAL_EXTRA_BODY_PROVIDERS:
         extra_body = dict(request.get("extra_body") or {})
-        extra_body.setdefault("thinking_budget_tokens", EFFORT_BUDGETS.get(effort, 1024))
+        extra_body["thinking_budget_tokens"] = EFFORT_BUDGETS.get(effort, 1024)
         ctk = dict(extra_body.get("chat_template_kwargs") or {})
-        ctk.setdefault("enable_thinking", effort != "none")
+        ctk["enable_thinking"] = effort != "none"
         extra_body["chat_template_kwargs"] = ctk
         request["extra_body"] = extra_body
     return {"request": request}
 
 
 def _on_llm_request(request: Dict[str, Any], **context: Any) -> Optional[Dict[str, Any]]:
-    # 1. Honor explicit reasoning if set by user or agent config
-    if request.get("reasoning_effort") not in (None, "", "auto"):
+    provider = str(context.get("provider") or "").strip().lower()
+
+    # 1. Honor explicit reasoning if pinned in profile config or overridden on the wire.
+    #    On local/custom providers, Hermes's CustomProfile fills reasoning_effort="medium" when unset.
+    if _profile_pinned_reasoning_effort():
         return None
-    if (request.get("extra_body") or {}).get("reasoning_effort"):
+    allowed_defaults = ("", "auto", "medium") if provider in _LOCAL_EXTRA_BODY_PROVIDERS else ("", "auto")
+    wire_effort = str(request.get("reasoning_effort") or "").strip().lower()
+    if wire_effort not in allowed_defaults:
+        return None
+    eb_effort = str((request.get("extra_body") or {}).get("reasoning_effort") or "").strip().lower()
+    if eb_effort not in allowed_defaults:
         return None
 
-    provider = str(context.get("provider") or "")
     session_id = str(context.get("session_id") or "")
     turn_id = str(context.get("turn_id") or "")
     messages = request.get("messages") or []
@@ -181,7 +239,8 @@ def _on_llm_request(request: Dict[str, Any], **context: Any) -> Optional[Dict[st
     #    Keep/escalate effort after tool errors; step down cleanly based on CLEAN_FOLLOWUP_MODE.
     if cache_key and cache_key in _TURN_EFFORT_CACHE:
         base_effort = _TURN_EFFORT_CACHE[cache_key]
-        if _last_tool_had_error(messages):
+        had_error = _last_tool_had_error(messages)
+        if had_error:
             effort = "low" if base_effort == "none" else base_effort
         elif CLEAN_FOLLOWUP_MODE == "none":
             effort = "none"
@@ -192,6 +251,16 @@ def _on_llm_request(request: Dict[str, Any], **context: Any) -> Optional[Dict[st
                 effort = "low"
             else:
                 effort = "none"
+        logger.info(
+            "dynamic_request_modifier: followup session=%s base=%s effort=%s budget=%s enable_thinking=%s had_error=%s mode=%s",
+            session_id,
+            base_effort,
+            effort,
+            EFFORT_BUDGETS.get(effort, 1024),
+            effort != "none",
+            had_error,
+            CLEAN_FOLLOWUP_MODE,
+        )
         return _apply_effort(request, effort, provider)
 
     # 3. Extract the last user message
@@ -214,18 +283,33 @@ def _on_llm_request(request: Dict[str, Any], **context: Any) -> Optional[Dict[st
         return None
 
     clean_lower = user_prompt.lower()
+    dt = 0.0
     # 4. Fast path for trivial greetings and commands (0ms)
     if clean_lower in FAST_NONE_PROMPTS or len(clean_lower) < 8:
         effort = "none"
-        _log_triage(user_prompt, effort, 0.0, "fast_path", session_id)
+        source = "fast_path"
+        _log_triage(user_prompt, effort, 0.0, source, session_id)
     else:
         # 5. Fast classification via configured auxiliary/classifier model
         try:
             effort, dt = _classify_effort(user_prompt)
-            _log_triage(user_prompt, effort, dt, "classifier_endpoint", session_id)
+            source = "classifier_endpoint"
+            _log_triage(user_prompt, effort, dt, source, session_id)
         except Exception as exc:
             logger.warning("Dynamic request classification failed (%s), falling back to medium", exc)
             effort = "medium"
+            source = "fallback"
+
+    logger.info(
+        "dynamic_request_modifier: turn1 session=%s provider=%s effort=%s budget=%s enable_thinking=%s source=%s latency_ms=%.1f",
+        session_id,
+        provider or "-",
+        effort,
+        EFFORT_BUDGETS.get(effort, 1024),
+        effort != "none",
+        source,
+        dt,
+    )
 
     if cache_key:
         if len(_TURN_EFFORT_CACHE) >= _MAX_TURN_CACHE:
@@ -244,13 +328,14 @@ def _handle_triage_command(raw_args: str) -> str:
         effort, dt = _classify_effort(test_prompt)
         return f"Triage test result for: '{test_prompt}'\nEffort: **{effort.upper()}** (in {dt:.1f} ms)"
 
-    if not AUDIT_LOG_FILE.exists():
+    audit_file = _get_audit_log_file()
+    if not audit_file.exists():
         return "Dynamic Request Modifier is active. No audit entries recorded yet."
 
     counts: Dict[str, int] = {"none": 0, "low": 0, "medium": 0, "high": 0}
     total = 0
     recent = []
-    with open(AUDIT_LOG_FILE, "r", encoding="utf-8") as f:
+    with open(audit_file, "r", encoding="utf-8") as f:
         for line in f:
             if not line.strip():
                 continue
