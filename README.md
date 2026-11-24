@@ -5,7 +5,7 @@ Custom plugins for [Hermes Agent](https://github.com/NousResearch/hermes-agent).
 ## Plugins
 
 - **`tool-clean-guard/`** — `pre_tool_call` / `post_tool_call` hygiene: strips leaked LLM XML/ChatML delimiters (`</content>`, `</parameter>`, `</tool_call>`, `<|im_end|>`) and SSH/LXC MOTD banners, validates multi-format syntax (Python AST, JSON, YAML, systemd units, `.env`) before `write_file`, and logs events to `$HERMES_HOME/logs/tool_clean_guard_events.jsonl` (`/tool-clean-guard` command).
-- **`dynamic-request-modifier/`** — `llm_request` middleware that classifies reasoning effort (`none`/`low`/`medium`/`high`) via Hermes's auxiliary model (`auxiliary.dynamic_request_modifier`) when `reasoning_effort` is unset or `auto`, injects per-request `reasoning_budget` + `chat_template_kwargs.enable_thinking` for local/llama-server providers, and steps down effort on clean tool-loop follow-ups while keeping/escalating effort after tool errors (`/triage` command).
+- **`dynamic-request-modifier/`** — `llm_request` middleware that classifies reasoning effort (`none`/`low`/`medium`/`high`) via Hermes's auxiliary model (`auxiliary.dynamic_request_modifier`) when `reasoning_effort` is unset or `auto`, injects per-request `thinking_budget_tokens` + `chat_template_kwargs.enable_thinking` for local/llama-server providers, and steps down effort on clean tool-loop follow-ups while keeping/escalating effort after tool errors (`/triage` command).
 
 ### Configuration (`dynamic-request-modifier`)
 

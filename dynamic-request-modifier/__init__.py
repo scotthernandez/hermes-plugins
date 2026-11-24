@@ -155,7 +155,7 @@ def _apply_effort(request: Dict[str, Any], effort: str, provider: str = "") -> D
     request["reasoning_effort"] = effort
     if (provider or "").lower() in _LOCAL_EXTRA_BODY_PROVIDERS:
         extra_body = dict(request.get("extra_body") or {})
-        extra_body.setdefault("reasoning_budget", EFFORT_BUDGETS.get(effort, 1024))
+        extra_body.setdefault("thinking_budget_tokens", EFFORT_BUDGETS.get(effort, 1024))
         ctk = dict(extra_body.get("chat_template_kwargs") or {})
         ctk.setdefault("enable_thinking", effort != "none")
         extra_body["chat_template_kwargs"] = ctk
