@@ -92,7 +92,7 @@ EFFORT_BUDGETS: Dict[str, int] = {
 
 _LOCAL_EXTRA_BODY_PROVIDERS = {"local", "custom", "openai_compat", "llama_cpp", ""}
 _TOOL_ERROR_RE = re.compile(
-    r"(?:traceback \(most recent call last\)|syntaxerror:|\"success\"\s*:\s*false|\"error\"\s*:|command exited with code [1-9]|returned non-zero exit status)",
+    r"(?:traceback \(most recent call last\)|syntaxerror:|\"success\"\s*:\s*false|\"error\"\s*:(?!\s*(?:null\b|false\b|\"\"\s*[,}]))|command exited with code [1-9]|returned non-zero exit status)",
     re.IGNORECASE,
 )
 
