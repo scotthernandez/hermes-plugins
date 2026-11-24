@@ -18,6 +18,7 @@ logger = logging.getLogger("hermes.plugin.dynamic_request_modifier")
 
 MODIFIER_ENDPOINT = os.environ.get("DYNAMIC_REQUEST_MODIFIER_ENDPOINT", "").strip()
 MODIFIER_MODEL = os.environ.get("DYNAMIC_REQUEST_MODIFIER_MODEL", "").strip()
+CLEAN_FOLLOWUP_MODE = os.environ.get("DYNAMIC_REQUEST_MODIFIER_CLEAN_FOLLOWUP", "step_down").strip().lower()
 AUX_TASK = "dynamic_request_modifier"
 PLUGIN_DIR = Path(__file__).parent
 FEW_SHOT_FILE = PLUGIN_DIR / "triage_few_shot.json"
@@ -52,7 +53,7 @@ def _load_few_shot_examples() -> str:
     try:
         with open(FEW_SHOT_FILE, "r", encoding="utf-8") as f:
             data = json.load(f)
-            lines = [f"Input: {item['prompt']}\nClassification: {item['effort']}" for item in data[:8]]
+            lines = [f"Input: {item['prompt']}\nClassification: {item['effort']}" for item in data[:12]]
             return "\n\n".join(lines)
     except Exception as exc:
         logger.debug("Failed to load few-shot examples: %s", exc)
@@ -177,15 +178,20 @@ def _on_llm_request(request: Dict[str, Any], **context: Any) -> Optional[Dict[st
     cache_key = (session_id, turn_id) if turn_id else None
 
     # 2. Tool-loop phase awareness: reuse Turn-1 classification without re-querying classifier.
-    #    Keep/escalate effort after tool errors; step high/medium down to low on clean follow-ups.
+    #    Keep/escalate effort after tool errors; step down cleanly based on CLEAN_FOLLOWUP_MODE.
     if cache_key and cache_key in _TURN_EFFORT_CACHE:
         base_effort = _TURN_EFFORT_CACHE[cache_key]
         if _last_tool_had_error(messages):
             effort = "low" if base_effort == "none" else base_effort
-        elif base_effort in ("high", "medium"):
-            effort = "low"
+        elif CLEAN_FOLLOWUP_MODE == "none":
+            effort = "none"
+        elif CLEAN_FOLLOWUP_MODE == "low":
+            effort = "low" if base_effort in ("high", "medium") else base_effort
         else:
-            effort = base_effort
+            if base_effort in ("high", "medium"):
+                effort = "low"
+            else:
+                effort = "none"
         return _apply_effort(request, effort, provider)
 
     # 3. Extract the last user message

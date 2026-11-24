@@ -14,6 +14,7 @@ By default, `dynamic-request-modifier` registers an `auxiliary.dynamic_request_m
 Optional direct-endpoint override:
 - `DYNAMIC_REQUEST_MODIFIER_ENDPOINT`: OpenAI-compatible `/v1/chat/completions` URL (e.g. `http://localhost:1237/v1/chat/completions`) to bypass `ctx.llm`
 - `DYNAMIC_REQUEST_MODIFIER_MODEL`: Optional model name to include when using `DYNAMIC_REQUEST_MODIFIER_ENDPOINT`
+- `DYNAMIC_REQUEST_MODIFIER_CLEAN_FOLLOWUP`: Controls clean tool-loop follow-up effort (`step_down` default: `high/medium -> low`, `low -> none`; `low`: `high/medium -> low`, `low -> low`; `none`: always `none` on clean follow-ups)
 
 ## Installation
 

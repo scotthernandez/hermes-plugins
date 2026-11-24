@@ -30,5 +30,17 @@
   {
     "prompt": "trace the root cause of a flaky integration test that only fails under load on CI",
     "effort": "HIGH"
+  },
+  {
+    "prompt": "what time is it?",
+    "effort": "NONE"
+  },
+  {
+    "prompt": "summarize that file",
+    "effort": "LOW"
+  },
+  {
+    "prompt": "refactor auth middleware across 5 files and add unit tests",
+    "effort": "HIGH"
   }
 ]
