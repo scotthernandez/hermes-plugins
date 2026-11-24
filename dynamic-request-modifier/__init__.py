@@ -5,6 +5,7 @@ from __future__ import annotations
 import json
 import logging
 import os
+import re
 import time
 import urllib.request
 from datetime import datetime, timezone
@@ -30,6 +31,19 @@ FAST_NONE_PROMPTS = {
     "hi", "hello", "hey", "yes", "no", "ok", "okay", "thanks", "thank you",
     "status", "ping", "whoami", "clear", "exit", "quit", "help"
 }
+
+EFFORT_BUDGETS: Dict[str, int] = {
+    "none": 0,
+    "low": 384,
+    "medium": 1024,
+    "high": 2048,
+}
+
+_LOCAL_EXTRA_BODY_PROVIDERS = {"local", "custom", "openai_compat", "llama_cpp", ""}
+_TOOL_ERROR_RE = re.compile(
+    r"(?:traceback \(most recent call last\)|syntaxerror:|\"success\"\s*:\s*false|\"error\"\s*:|command exited with code [1-9]|returned non-zero exit status)",
+    re.IGNORECASE,
+)
 
 
 def _load_few_shot_examples() -> str:
@@ -123,6 +137,32 @@ def _log_triage(prompt: str, effort: str, dt_ms: float, source: str, session_id:
         logger.debug("Failed to write triage audit log: %s", exc)
 
 
+def _last_tool_had_error(messages: List[Dict[str, Any]]) -> bool:
+    """Check trailing tool result messages since the last assistant turn for errors."""
+    for msg in reversed(messages):
+        role = msg.get("role")
+        if role != "tool":
+            break
+        content = msg.get("content")
+        text = content if isinstance(content, str) else json.dumps(content or "")
+        if _TOOL_ERROR_RE.search(text):
+            return True
+    return False
+
+
+def _apply_effort(request: Dict[str, Any], effort: str, provider: str = "") -> Dict[str, Any]:
+    """Set reasoning_effort and (for local/llama-server providers) per-request budget + enable_thinking."""
+    request["reasoning_effort"] = effort
+    if (provider or "").lower() in _LOCAL_EXTRA_BODY_PROVIDERS:
+        extra_body = dict(request.get("extra_body") or {})
+        extra_body.setdefault("reasoning_budget", EFFORT_BUDGETS.get(effort, 1024))
+        ctk = dict(extra_body.get("chat_template_kwargs") or {})
+        ctk.setdefault("enable_thinking", effort != "none")
+        extra_body["chat_template_kwargs"] = ctk
+        request["extra_body"] = extra_body
+    return {"request": request}
+
+
 def _on_llm_request(request: Dict[str, Any], **context: Any) -> Optional[Dict[str, Any]]:
     # 1. Honor explicit reasoning if set by user or agent config
     if request.get("reasoning_effort") not in (None, "", "auto"):
@@ -130,16 +170,26 @@ def _on_llm_request(request: Dict[str, Any], **context: Any) -> Optional[Dict[st
     if (request.get("extra_body") or {}).get("reasoning_effort"):
         return None
 
+    provider = str(context.get("provider") or "")
     session_id = str(context.get("session_id") or "")
     turn_id = str(context.get("turn_id") or "")
+    messages = request.get("messages") or []
     cache_key = (session_id, turn_id) if turn_id else None
+
+    # 2. Tool-loop phase awareness: reuse Turn-1 classification without re-querying classifier.
+    #    Keep/escalate effort after tool errors; step high/medium down to low on clean follow-ups.
     if cache_key and cache_key in _TURN_EFFORT_CACHE:
-        request["reasoning_effort"] = _TURN_EFFORT_CACHE[cache_key]
-        return {"request": request}
+        base_effort = _TURN_EFFORT_CACHE[cache_key]
+        if _last_tool_had_error(messages):
+            effort = "low" if base_effort == "none" else base_effort
+        elif base_effort in ("high", "medium"):
+            effort = "low"
+        else:
+            effort = base_effort
+        return _apply_effort(request, effort, provider)
 
     # 3. Extract the last user message
     user_prompt = ""
-    messages = request.get("messages") or []
     for msg in reversed(messages):
         if msg.get("role") == "user":
             content = msg.get("content")
@@ -176,8 +226,7 @@ def _on_llm_request(request: Dict[str, Any], **context: Any) -> Optional[Dict[st
             _TURN_EFFORT_CACHE.clear()
         _TURN_EFFORT_CACHE[cache_key] = effort
 
-    request["reasoning_effort"] = effort
-    return {"request": request}
+    return _apply_effort(request, effort, provider)
 
 
 def _handle_triage_command(raw_args: str) -> str:
